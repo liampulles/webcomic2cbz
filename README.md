@@ -92,7 +92,7 @@ There are several ordered worker queues, which can be provisioned dynamically. T
 
 Each queue has 1 worker, but all the queues run concurrently with each other.
 
-Each job in the queue locks itself, and these locks work via `<key>.w2clock` files in the relevant queue directories. This is to avoid potential conflicts if multiple `webcomic2cbz` instances are invoked at the same time for a conflicting set of directories.
+Queues can acquire file locks, if they need to deal with files. This prevents other queues and other `webcomic2cbz` processes from touching them.
 
 The program stops when all the queues are finished. The main algorithm itself is a queue.
 
