@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -21,8 +20,6 @@ var ErrAlreadyLocked = errors.New("the file is already locked")
 // Do something under a file lock, so that other queues (and other webcomic2cbz
 // processes) cannot do so at the same time.
 //
-// The given file does not have to exist.
-//
 // acquireTimeout dictates how long to retry acquiring the lock before
 // giving up and returning ErrAlreadyLocked.
 //
@@ -33,16 +30,15 @@ func WithLockFile(path string, acquireTimeout time.Duration, fn withLockFn) erro
 	return withLockFile(path, acquireTimeout, fn, lockFn)
 }
 
-// Similar to WithLockFile, but only to read the file. This has the convenience that
+// Similar to WithLockFile, but only to read. This has the convenience that
 // multiple items that just need to read the file can do so concurrently.
 func WithRLockFile(path string, acquireTimeout time.Duration, fn withLockFn) error {
 	lockFn := func(f *flock.Flock) ctxLockFn { return f.TryLockContext }
 	return withLockFile(path, acquireTimeout, fn, lockFn)
 }
 
-func withLockFile(path string, acquireTimeout time.Duration, fn withLockFn, lockFn ctxLockFnGen) error {
+func withLockFile(lockPath string, acquireTimeout time.Duration, fn withLockFn, lockFn ctxLockFnGen) error {
 	// Setup
-	lockPath := strings.Join([]string{path, "lock"}, ".")
 	f := flock.New(lockPath)
 
 	ctx, cancel := context.WithTimeout(context.Background(), acquireTimeout)
@@ -62,7 +58,7 @@ func withLockFile(path string, acquireTimeout time.Duration, fn withLockFn, lock
 		unlockErr := f.Unlock()
 		if unlockErr != nil {
 			log.Debug().
-				Str("path", path).
+				Str("lock_path", lockPath).
 				Str("unlock_msg", unlockErr.Error()).
 				Msg("could not unlock, but carrying on.")
 		}

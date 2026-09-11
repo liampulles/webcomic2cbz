@@ -2,22 +2,25 @@ package main
 
 import (
 	"os"
+	"time"
 
 	"go.yaml.in/yaml/v4"
 )
 
+const ConfigName = "webcomic2cbz.yml"
+
 type Config struct {
-	Title       string `yaml:"title"`
-	Writer      string `yaml:"writer"`
-	LanguageIso string `yaml:"language_iso"`
-	FirstDate   string `yaml:"first_date"`
-	Homepage    string `yaml:"homepage"`
-	Summary     string `yaml:"summary"`
+	Title           string    `yaml:"title"`
+	Writer          string    `yaml:"writer"`
+	LanguageIso     string    `yaml:"language_iso"`
+	FirstDate       string    `yaml:"first_date"`
+	ParsedFirstDate time.Time `yaml:"-"`
+	Homepage        string    `yaml:"homepage"`
+	Summary         string    `yaml:"summary"`
 
 	Cbz struct {
 		ChunkSize      int    `yaml:"chunk_size"`
 		NamingTemplate string `yaml:"naming_template"`
-		OutputPath     string `yaml:"output_path"`
 	} `yaml:"cbz"`
 
 	Source []Source `yaml:"source"`
@@ -25,11 +28,15 @@ type Config struct {
 
 type Source struct {
 	Imgfiles struct {
-		PathGlob string `yaml:"path_glob"`
-		IdxRegex string `yaml:"idx_regex"`
+		BasenameGlob string `yaml:"basename_glob"`
+		IdxRegex     string `yaml:"idx_regex"`
 	} `yaml:"imgfiles,omitempty"`
 	Httpdirect struct {
-		URLFormat string `yaml:"url_format"`
+		URLFormat  string `yaml:"url_format"`
+		StartAt    int    `yaml:"start_at"`
+		LatestRule struct {
+			Regex string `yaml:"regex"`
+		} `yaml:"latest_rule"`
 	} `yaml:"httpdirect,omitempty"`
 }
 
@@ -46,6 +53,13 @@ func ParseConfig(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+
+	// Parse and attempt to assemble a date.
+	firstDate, err := time.Parse(time.DateOnly, config.FirstDate)
+	if err != nil {
+		return Config{}, err
+	}
+	config.ParsedFirstDate = firstDate
 
 	return config, nil
 }

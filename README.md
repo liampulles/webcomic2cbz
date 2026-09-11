@@ -59,16 +59,19 @@ cbz:
     #  a few cbz files, they will be ignored in updates. You should
     #  rename the files manually as well).
     naming_template: '{{ .Title }} #{{ printf "%03d" .Volume }}'
-    output_path: .
 
 source:
     # Ordered list of options, highest is tried first, then it goes to the next option if there are gaps in the sequence and to test for newer issues.
     - imgfiles:
-        path_glob: ./*.png
+        basename_glob: "*.png"
         idx_regex: ^([0-9]+)$
     - httpdirect:
         url_format: https://www.questionablecontent.net/comics/{{.Idx}}.png
-
+        start_at: 1
+        latest_rule:
+          # Match the <img id="strip"> element and capture the numeric comic index,
+          # regardless of the image file extension.
+          regex: '<img[^>]+id=["'']strip["''][^>]+src=["''][^"'']*/comics/([0-9]+)\.[^"'']+["'']'
 ```
 
 ## Internals
