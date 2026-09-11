@@ -78,12 +78,12 @@ func (h *HTTPDirectSource) Available() ([]int, error) {
 		return nil, err
 	}
 
-	found := h.homepageRegex.Find(bytes)
+	found := h.homepageRegex.FindSubmatch(bytes)
 	if found == nil {
 		return nil, errors.New("homepage regex: no match found, check your config")
 	}
 
-	latest, err := strconv.Atoi(string(found))
+	latest, err := strconv.Atoi(string(found[1]))
 	if err != nil {
 		return nil, errors.New("homepage regex: not selecting an integer, check your config")
 	}
@@ -169,15 +169,15 @@ func (i *ImgFilesSource) Available() ([]int, error) {
 	// Keep the base names
 	bases := make([]string, len(found))
 	for i, item := range found {
-		bases[i] = filepath.Base(item)
+		bases[i] = strings.TrimSuffix(filepath.Base(item), filepath.Ext(item))
 	}
 
 	// Filter by regex, getting idx part
 	var filtered []string
 	for _, base := range bases {
-		match := i.idxRegex.FindString(base)
-		if match != "" {
-			filtered = append(filtered, match)
+		match := i.idxRegex.FindStringSubmatch(base)
+		if match != nil {
+			filtered = append(filtered, match[1])
 		}
 	}
 
@@ -285,7 +285,7 @@ func resolveSources(cfg Config, dir string) []Source {
 				return nil
 			}
 			sources = append(sources, source)
-			continue
+			break
 		}
 	}
 	return sources
@@ -293,19 +293,19 @@ func resolveSources(cfg Config, dir string) []Source {
 
 // Returns base - sub, in set terms
 func Diff[T comparable](base, sub []T) []T {
-	baseSet := make(map[T]bool, len(base))
-	for _, item := range base {
-		baseSet[item] = true
+	subSet := make(map[T]bool, len(sub))
+	for _, item := range sub {
+		subSet[item] = true
 	}
 
-	seen := make(map[T]bool, len(sub))
+	seen := make(map[T]bool, len(base))
 	var diff []T
-	for _, item := range sub {
+	for _, item := range base {
 		if seen[item] {
 			continue
 		}
 		seen[item] = true
-		if !baseSet[item] {
+		if !subSet[item] {
 			diff = append(diff, item)
 		}
 	}
@@ -341,10 +341,14 @@ func getTempFile(url string) (string, error) {
 		return "", fmt.Errorf("http: %d", resp.StatusCode)
 	}
 
-	tmpDir := os.TempDir()
-	f, err := os.CreateTemp(tmpDir, "")
+	err = os.MkdirAll(httpDirectTempDir(), 0755)
 	if err != nil {
-		return "", fmt.Errorf("temp create: %w", err)
+		return "", fmt.Errorf("temp dir create: %w", err)
+	}
+
+	f, err := os.CreateTemp(httpDirectTempDir(), "")
+	if err != nil {
+		return "", fmt.Errorf("temp file create: %w", err)
 	}
 	defer f.Close()
 
@@ -353,5 +357,9 @@ func getTempFile(url string) (string, error) {
 		return "", fmt.Errorf("temp copy: %w", err)
 	}
 
-	return filepath.Join(tmpDir, f.Name()), nil
+	return f.Name(), nil
+}
+
+func httpDirectTempDir() string {
+	return filepath.Join(os.TempDir(), "webcomic2cbz_httpdirect")
 }

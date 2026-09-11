@@ -96,6 +96,10 @@ func configProcessJob(cfgPath string) Job {
 		for _, imgIdxs := range cbzImgIdxs {
 			allIdx = append(allIdx, imgIdxs...)
 		}
+
+		// Source missing webcomics
+		sourced := SourceWebcomics(cfg, allIdx, cfgDir)
+		log.Info().Interface("sourced", sourced).Msg("sourced some images")
 	}
 }
 
@@ -140,8 +144,8 @@ func readCBZImageIdx(cbzPath string) ([]int, error) {
 		}
 
 		// Get the idx part
-		idxStr := idxImageRegex.FindString(f.Name)
-		idx, err := strconv.Atoi(idxStr)
+		idxStr := idxImageRegex.FindStringSubmatch(f.Name)
+		idx, err := strconv.Atoi(idxStr[1])
 		if err != nil {
 			return nil, err
 		}
