@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -20,6 +21,7 @@ import (
 var configRegex = regexp.MustCompile(`^webcomic2cbz\.(?:yml|yaml)$`)
 var cbzRegex = regexp.MustCompile(`^.*\.cbz$`)
 var idxImageRegex = regexp.MustCompile(`^(\d+)\.(?:jpg|png|jpeg|gif|bmp|webp)$`)
+var imageRegex = regexp.MustCompile(`^.*\.(?:jpg|png|jpeg|gif|bmp|webp)$`)
 
 // --- Lock keys
 
@@ -80,9 +82,11 @@ func configProcessJob(cfgPath string) Job {
 		}
 
 		// Update the ComicInfo.xml for the existing CBZs associated to a webcomic, and also
-		// track what webcomics we actually have.
+		// track what webcomics we actually have. If the existing CBZs don't line up with
+		// our chunking config, then extract the images and delete them (they'll be recreated
+		// later).
 		cbzImgIdxs, err := DoConcurrentProcess(5, cbzItems, func(cbz cbzItem) ([]int, error) {
-			imgIdxs, err := comicInfoUpsertSingle(cbz.Path, cbz.Number, cfg)
+			imgIdxs, err := existingCBZProcess(cbz.Path, cbz.Number, cfg)
 			if err != nil {
 				return nil, fmt.Errorf("%s: %w", cbz.Path, err)
 			}
@@ -105,12 +109,41 @@ func configProcessJob(cfgPath string) Job {
 
 // --- Helper funcs
 
-func comicInfoUpsertSingle(cbzPath string, number int, cfg Config) ([]int, error) {
+func existingCBZProcess(cbzPath string, number int, cfg Config) ([]int, error) {
 	// Read the cbz
 	log.Info().Str("path", cbzPath).Msg("reading cbz...")
-	imageIdx, err := readCBZImageIdx(cbzPath)
+	imageIdx, others, err := readCBZImageIdx(cbzPath)
 	if err != nil {
 		return nil, err
+	}
+
+	// See if the found idx line up with our expectations. And if there are other images,
+	// then we definitely want to trigger.
+	start, end := issueIdxRange(number, cfg)
+	var problemIdx []int
+	for _, idx := range imageIdx {
+		if idx >= start && idx <= end {
+			continue
+		}
+		problemIdx = append(problemIdx, idx)
+		// One is enough.
+		break
+	}
+	if len(others) > 0 || len(problemIdx) > 0 {
+		// Looks like at least one idx is unexpected - then
+		// we'll extract the images and delete the cbz, and give
+		// an ImgSource the possibility to use those images
+		// to build a proper cbz.
+		extractCBZIdxImages(cbzPath)
+		err = os.Remove(cbzPath)
+		if err != nil {
+			log.Err(err).
+				Str("path", cbzPath).
+				Msg("could not delete the cbz - since this means we cannot build a consistent set, we must panic")
+			panic(err)
+		}
+		// We report no files existing in this cbz - because it does not exist anymore.
+		return nil, nil
 	}
 
 	// Update ComicInfo
@@ -123,17 +156,28 @@ func comicInfoUpsertSingle(cbzPath string, number int, cfg Config) ([]int, error
 	return imageIdx, nil
 }
 
-// Locking is up to the caller.
-func readCBZImageIdx(cbzPath string) ([]int, error) {
+// Inclusive on both sides
+func issueIdxRange(number int, cfg Config) (int, int) {
+	chunk := cfg.Cbz.ChunkSize
+	start := ((number - 1) * chunk) + 1
+	end := number * chunk
+	return start, end
+}
+
+func extractCBZIdxImages(cbzPath string) {
+	dir := filepath.Dir(cbzPath)
+
 	// Open the CBZ file
 	zr, err := zip.OpenReader(cbzPath)
 	if err != nil {
-		return nil, err
+		log.Err(err).
+			Str("path", cbzPath).
+			Msg("could not open the cbz file - won't be able to save any images from it")
+		return
 	}
 	defer zr.Close()
 
 	// Find embedded images, with an idx like title
-	var found []int
 	for _, f := range zr.File {
 		// Filter out irrelevant listings
 		if f.FileInfo().IsDir() {
@@ -143,16 +187,74 @@ func readCBZImageIdx(cbzPath string) ([]int, error) {
 			continue
 		}
 
+		// "Open" the image in the zip
+		zf, err := f.Open()
+		if err != nil {
+			log.Err(err).
+				Str("path", cbzPath).
+				Msg("could not open an image in the zip - will skip this one")
+			continue
+		}
+		defer zf.Close()
+
+		// Prep an output image
+		outPath := filepath.Join(dir, f.Name)
+		of, err := os.Create(outPath)
+		if err != nil {
+			log.Err(err).
+				Str("path", outPath).
+				Msg("could not create a file to extract an image - will skip this one")
+			continue
+		}
+		defer of.Close()
+
+		// Write to it
+		_, err = io.Copy(of, zf)
+		if err != nil {
+			log.Err(err).
+				Str("path", outPath).
+				Msg("could not write image data - will skip this one")
+			continue
+		}
+	}
+}
+
+// Locking is up to the caller.
+func readCBZImageIdx(cbzPath string) ([]int, []string, error) {
+	// Open the CBZ file
+	zr, err := zip.OpenReader(cbzPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer zr.Close()
+
+	// Find embedded images, with an idx like title. And note others.
+	var found []int
+	var others []string
+	for _, f := range zr.File {
+		// Filter out irrelevant listings
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		if !idxImageRegex.MatchString(f.Name) {
+			// Is it perhaps an other image though?
+			if imageRegex.MatchString(f.Name) {
+				others = append(others, f.Name)
+			}
+
+			continue
+		}
+
 		// Get the idx part
 		idxStr := idxImageRegex.FindStringSubmatch(f.Name)
 		idx, err := strconv.Atoi(idxStr[1])
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		found = append(found, idx)
 	}
 
-	return found, nil
+	return found, others, nil
 }
 
 type cbzItem struct {
