@@ -22,19 +22,19 @@ type Config struct {
 		NamingTemplate string `yaml:"naming_template"`
 	} `yaml:"cbz"`
 
-	Source []Source `yaml:"source"`
+	Source []SourceConfig `yaml:"source"`
 }
 
-type Source struct {
+type SourceConfig struct {
 	Imgfiles struct {
-		BasenameGlob string `yaml:"basename_glob"`
-		IdxRegex     string `yaml:"idx_regex"`
+		BasenameGlob   string `yaml:"basename_glob"`
+		BasenameFormat string `yaml:"basename_format"`
+		IdxRegex       string `yaml:"idx_regex"`
 	} `yaml:"imgfiles,omitempty"`
 	Httpdirect struct {
 		URLFormat  string `yaml:"url_format"`
-		StartAt    int    `yaml:"start_at"`
 		LatestRule struct {
-			Regex string `yaml:"regex"`
+			HomepageRegex string `yaml:"homepage_regex"`
 		} `yaml:"latest_rule"`
 	} `yaml:"httpdirect,omitempty"`
 }

@@ -64,14 +64,14 @@ source:
     # Ordered list of options, highest is tried first, then it goes to the next option if there are gaps in the sequence and to test for newer issues.
     - imgfiles:
         basename_glob: "*.png"
+        basename_format: "{{.Idx}}.png"
         idx_regex: ^([0-9]+)$
     - httpdirect:
         url_format: https://www.questionablecontent.net/comics/{{.Idx}}.png
-        start_at: 1
         latest_rule:
           # Match the <img id="strip"> element and capture the numeric comic index,
           # regardless of the image file extension.
-          regex: '<img[^>]+id=["'']strip["''][^>]+src=["''][^"'']*/comics/([0-9]+)\.[^"'']+["'']'
+          homepage_regex: '<img[^>]+id=["'']strip["''][^>]+src=["''][^"'']*/comics/([0-9]+)\.[^"'']+["'']'
 ```
 
 ## Internals
