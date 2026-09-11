@@ -10,13 +10,12 @@ import (
 const ConfigName = "webcomic2cbz.yml"
 
 type Config struct {
-	Title           string    `yaml:"title"`
-	Writer          string    `yaml:"writer"`
-	LanguageIso     string    `yaml:"language_iso"`
-	FirstDate       string    `yaml:"first_date"`
-	ParsedFirstDate time.Time `yaml:"-"`
-	Homepage        string    `yaml:"homepage"`
-	Summary         string    `yaml:"summary"`
+	Title       string    `yaml:"title"`
+	Writer      string    `yaml:"writer"`
+	LanguageIso string    `yaml:"language_iso"`
+	FirstDate   time.Time `yaml:"first_date"`
+	Homepage    string    `yaml:"homepage"`
+	Summary     string    `yaml:"summary"`
 
 	Cbz struct {
 		ChunkSize      int    `yaml:"chunk_size"`
@@ -53,13 +52,6 @@ func ParseConfig(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-
-	// Parse and attempt to assemble a date.
-	firstDate, err := time.Parse(time.DateOnly, config.FirstDate)
-	if err != nil {
-		return Config{}, err
-	}
-	config.ParsedFirstDate = firstDate
 
 	return config, nil
 }

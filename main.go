@@ -2,28 +2,19 @@ package main
 
 import (
 	"archive/zip"
-	"context"
 	"fmt"
 	"io/fs"
 	"os"
-	"os/signal"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
-	"syscall"
 	"text/template"
 	"time"
 
 	"github.com/rs/zerolog/log"
 )
-
-// --- QIDs
-
-const scanQID = "scan"
-const configProcessQID = "config_process"
-const comicInfoUpsertQID = "comic_info_upsert"
 
 // --- Regex
 
@@ -45,47 +36,30 @@ func cbzFileLockKey(cbzPath string) string {
 
 func main() {
 	// Get current working dir
-	wd, err := os.Getwd()
+	root, err := os.Getwd()
 	if err != nil {
 		panic(fmt.Errorf("could not determine working dir: %w", err))
 	}
 
-	// Define a few "global" queues.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	cancel := DefineQueues(ctx,
-		QueueDefinition{scanQID, 1},
-		QueueDefinition{configProcessQID, 10},
-		QueueDefinition{comicInfoUpsertQID, 10},
-	)
-
-	// Enqueue the scan job
-	Enqueue(scanQID, scanJob(wd))
-	cancel()
-
-	// Wait for all queues
-	QueuesWait()
-}
-
-// Scan for webcomic2cbz.yml files and enqueue them.
-func scanJob(root string) Job {
-	return func(ctx context.Context) {
-		// Enqueue any found config files
-		log.Info().Str("root", root).Msg("scanning for config...")
-		found, err := findFilesRecursive(root, configRegex)
-		if err != nil {
-			log.Err(err).Str("root", root).Msg("error encountered whilst scanning - continuing.")
-		}
-		for _, path := range found {
-			Enqueue(configProcessQID, configProcessJob(path))
-		}
+	// Look for config files
+	log.Info().Str("root", root).Msg("scanning for config...")
+	found, err := findFilesRecursive(root, configRegex)
+	if err != nil {
+		log.Err(err).Str("root", root).Msg("error encountered whilst scanning - continuing.")
 	}
+
+	// Handle concurrently
+	var jobs []Job
+	for _, path := range found {
+		jobs = append(jobs, configProcessJob(path))
+	}
+	DoConcurrent(5, jobs)
 }
 
 // Responsible for reading and parsing a found config file, and looking for relevant cbz
 // files in the enclosed directory.
 func configProcessJob(cfgPath string) Job {
-	return func(ctx context.Context) {
+	return func() {
 		// Read the config
 		log.Info().Str("path", cfgPath).Msg("reading config...")
 		cfg, err := ParseConfig(cfgPath)
@@ -107,18 +81,13 @@ func configProcessJob(cfgPath string) Job {
 		if err != nil {
 			log.Err(err).Str("path", cfgPath).Msg("could not read cfg dir - continuing.")
 		}
-		allCBZ, err := filterMatchingCBZ(cfgPath, cfg, all)
+		cbzPaths, err := filterMatchingCBZ(cfgPath, cfg, all)
 		if err != nil {
 			return
 		}
-		Enqueue(comicInfoUpsertQID, comicInfoUpsertJob(allCBZ, cfg))
-	}
-}
 
-// Update the ComicInfo.xml for the existing CBZs associated to a webcomic, and also
-// track what webcomics we actually have.
-func comicInfoUpsertJob(cbzPaths map[string]int, cfg Config) Job {
-	return func(ctx context.Context) {
+		// Update the ComicInfo.xml for the existing CBZs associated to a webcomic, and also
+		// track what webcomics we actually have.
 		var allIdx []int
 		for cbzPath, number := range cbzPaths {
 			cbzIdx, err := comicInfoUpsertSingle(cbzPath, number, cfg)
