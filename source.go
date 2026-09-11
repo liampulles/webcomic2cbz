@@ -32,9 +32,11 @@ var sourceSetups []sourceSetupFn = []sourceSetupFn{
 // --- HTTPDirectSource
 
 type HTTPDirectSource struct {
-	homepageRegex *regexp.Regexp
-	homepage      string
-	urlTemplate   *template.Template
+	imgDir           string
+	homepageRegex    *regexp.Regexp
+	homepage         string
+	urlTemplate      *template.Template
+	basenameTemplate *template.Template
 }
 
 func tryHTTPDirectSource(srcCfg SourceConfig, cfg Config, dir string) (bool, Source, error) {
@@ -52,10 +54,17 @@ func tryHTTPDirectSource(srcCfg SourceConfig, cfg Config, dir string) (bool, Sou
 		return true, nil, fmt.Errorf("url template: %w", err)
 	}
 
+	basenameTemplate, err := template.New("basename").Parse(srcCfg.Httpdirect.BasenameFormat)
+	if err != nil {
+		return true, nil, fmt.Errorf("basename format: %w", err)
+	}
+
 	source := &HTTPDirectSource{
-		homepageRegex: homepageRegex,
-		homepage:      cfg.Homepage,
-		urlTemplate:   urlTemplate,
+		imgDir:           dir,
+		homepageRegex:    homepageRegex,
+		homepage:         cfg.Homepage,
+		urlTemplate:      urlTemplate,
+		basenameTemplate: basenameTemplate,
 	}
 	return true, source, nil
 }
@@ -111,7 +120,52 @@ func (h *HTTPDirectSource) Fetch(idx int) (string, error) {
 	url := b.String()
 
 	// Download to a temp file
-	return getTempFile(url)
+	tmpPath, err := getTempFile(url)
+	if err != nil {
+		return "", err
+	}
+
+	// Move it to the comic dir with an appropriate name
+	// (so it can potentially be used by image source)
+
+	// Figure out path
+	var b2 strings.Builder
+	err = h.basenameTemplate.Execute(&b2, data)
+	if err != nil {
+		return "", err
+	}
+	base := b2.String()
+	path := filepath.Join(h.imgDir, base)
+
+	// Create a file
+	of, err := os.Create(path)
+	if err != nil {
+		return "", err
+	}
+	defer of.Close()
+
+	// Open the temporary file
+	inf, err := os.Open(tmpPath)
+	if err != nil {
+		return "", err
+	}
+	defer inf.Close()
+
+	// Copy
+	_, err = io.Copy(of, inf)
+	if err != nil {
+		return "", err
+	}
+
+	// Delete the temp file (but don't fail if we can't)
+	os.Remove(tmpPath)
+
+	log.Info().
+		Str("source", h.Name()).
+		Int("idx", idx).
+		Str("path", path).
+		Msg("fetch succeeded.")
+	return path, nil
 }
 
 // --- ImgFilesSource
@@ -255,11 +309,6 @@ func SourceWebcomics(cfg Config, existing []int, dir string) []Sourced {
 					Msg("fetch failed - skipping this image.")
 				return Sourced{}, err
 			}
-			log.Info().
-				Str("source", source.Name()).
-				Int("idx", idx).
-				Str("path", path).
-				Msg("fetch succeeded.")
 			return Sourced{Idx: idx, Path: path}, err
 		})
 		for _, item := range someSourced {

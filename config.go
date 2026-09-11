@@ -32,8 +32,9 @@ type SourceConfig struct {
 		IdxRegex       string `yaml:"idx_regex"`
 	} `yaml:"imgfiles,omitempty"`
 	Httpdirect struct {
-		URLFormat  string `yaml:"url_format"`
-		LatestRule struct {
+		URLFormat      string `yaml:"url_format"`
+		BasenameFormat string `yaml:"basename_format"`
+		LatestRule     struct {
 			HomepageRegex string `yaml:"homepage_regex"`
 		} `yaml:"latest_rule"`
 	} `yaml:"httpdirect,omitempty"`

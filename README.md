@@ -68,6 +68,7 @@ source:
         idx_regex: ^([0-9]+)$
     - httpdirect:
         url_format: https://www.questionablecontent.net/comics/{{.Idx}}.png
+        basename_format: "{{.Idx}}.png"
         latest_rule:
           # Match the <img id="strip"> element and capture the numeric comic index,
           # regardless of the image file extension.

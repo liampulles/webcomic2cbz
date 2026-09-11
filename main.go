@@ -102,8 +102,7 @@ func configProcessJob(cfgPath string) Job {
 		}
 
 		// Source missing webcomics
-		sourced := SourceWebcomics(cfg, allIdx, cfgDir)
-		log.Info().Interface("sourced", sourced).Msg("sourced some images")
+		SourceWebcomics(cfg, allIdx, cfgDir)
 	}
 }
 
