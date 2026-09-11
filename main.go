@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"text/template"
-	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -71,31 +70,31 @@ func configProcessJob(cfgPath string) Job {
 		// Scan for matching CBZ files and upsert ComicInfo for them. This needs to lock cbzs
 		// for the dir.
 		cfgDir := path.Dir(cfgPath)
-		var all []os.DirEntry
-		lockErr := WithRLockFile(cbzDirLockKey(cfgDir), 1*time.Minute, func() {
-			all, err = os.ReadDir(cfgDir)
-		})
-		if lockErr != nil {
-			log.Err(lockErr).Str("path", cfgPath).Msg("could not acquire cbzDirs lock - continuing.")
-		}
+		all, err := os.ReadDir(cfgDir)
 		if err != nil {
 			log.Err(err).Str("path", cfgPath).Msg("could not read cfg dir - continuing.")
 		}
-		cbzPaths, err := filterMatchingCBZ(cfgPath, cfg, all)
+		cbzItems, err := filterMatchingCBZ(cfgDir, cfg, all)
 		if err != nil {
 			return
 		}
 
 		// Update the ComicInfo.xml for the existing CBZs associated to a webcomic, and also
 		// track what webcomics we actually have.
-		var allIdx []int
-		for cbzPath, number := range cbzPaths {
-			cbzIdx, err := comicInfoUpsertSingle(cbzPath, number, cfg)
+		cbzImgIdxs, err := DoConcurrentProcess(5, cbzItems, func(cbz cbzItem) ([]int, error) {
+			imgIdxs, err := comicInfoUpsertSingle(cbz.Path, cbz.Number, cfg)
 			if err != nil {
-				log.Err(err).Str("path", cbzPath).Msg("could not read cbz - skipping webcomic.")
-				return
+				return nil, fmt.Errorf("%s: %w", cbz.Path, err)
 			}
-			allIdx = append(allIdx, cbzIdx...)
+			return imgIdxs, nil
+		})
+		if err != nil {
+			log.Err(err).Str("path", cfgPath).Msg("could not read some cbzs - skipping webcomic.")
+			return
+		}
+		var allIdx []int
+		for _, imgIdxs := range cbzImgIdxs {
+			allIdx = append(allIdx, imgIdxs...)
 		}
 	}
 }
@@ -104,17 +103,8 @@ func configProcessJob(cfgPath string) Job {
 
 func comicInfoUpsertSingle(cbzPath string, number int, cfg Config) ([]int, error) {
 	// Read the cbz
-	var imageIdx []int
-	var err error
-	lockErr := WithRLockFile(cbzFileLockKey(cbzPath), 1*time.Minute, func() {
-		imageIdx, err = readCBZImageIdx(cbzPath)
-		if err != nil {
-			return
-		}
-	})
-	if lockErr != nil {
-		return nil, err
-	}
+	log.Info().Str("path", cbzPath).Msg("reading cbz...")
+	imageIdx, err := readCBZImageIdx(cbzPath)
 	if err != nil {
 		return nil, err
 	}
@@ -161,11 +151,16 @@ func readCBZImageIdx(cbzPath string) ([]int, error) {
 	return found, nil
 }
 
-func filterMatchingCBZ(cfgPath string, cfg Config, all []os.DirEntry) (map[string]int, error) {
+type cbzItem struct {
+	Path   string
+	Number int
+}
+
+func filterMatchingCBZ(cfgDir string, cfg Config, all []os.DirEntry) ([]cbzItem, error) {
 	// Generate hypothetical titles up to 999 volumes, as a match set.
 	matchSet := make(map[string]int, 999)
 	for i := 1; i < 1000; i++ {
-		name, err := cbzTitle(cfgPath, cfg, i)
+		name, err := cbzTitle(cfgDir, cfg, i)
 		if err != nil {
 			return nil, err
 		}
@@ -173,7 +168,7 @@ func filterMatchingCBZ(cfgPath string, cfg Config, all []os.DirEntry) (map[strin
 	}
 
 	// See which match
-	keep := make(map[string]int)
+	var keep []cbzItem
 	for _, entry := range all {
 		if entry.IsDir() {
 			continue
@@ -185,19 +180,19 @@ func filterMatchingCBZ(cfgPath string, cfg Config, all []os.DirEntry) (map[strin
 		if !ok {
 			continue
 		}
-		keep[path.Join(cfgPath, name)] = number
+		keep = append(keep, cbzItem{path.Join(cfgDir, name), number})
 	}
 
 	return keep, nil
 }
 
-func cbzTitle(cfgPath string, cfg Config, volume int) (string, error) {
+func cbzTitle(cfgDir string, cfg Config, volume int) (string, error) {
 	// TODO: Could possibly cache built templates, if needed.
 	// Define the template
 	tmpl, err := template.New("cbz").Parse(cfg.Cbz.NamingTemplate)
 	if err != nil {
 		log.Err(err).
-			Str("cfg_path", cfgPath).
+			Str("cfg_dir", cfgDir).
 			Msg("invalid cbz.naming_template - please fix this. skipping this dir.")
 		return "", err
 	}
@@ -216,7 +211,7 @@ func cbzTitle(cfgPath string, cfg Config, volume int) (string, error) {
 	err = tmpl.Execute(&b, data)
 	if err != nil {
 		log.Err(err).
-			Str("cfg_path", cfgPath).
+			Str("cfg_dir", cfgDir).
 			Msg("invalid cbz.naming_template - please fix this. skipping this dir.")
 		return "", err
 	}

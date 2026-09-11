@@ -42,7 +42,9 @@ func UpsertComicInfo(cbzPath string, info ComicInfo) error {
 	if err != nil {
 		return err
 	}
-	err = xml.NewEncoder(w).Encode(info)
+	encoder := xml.NewEncoder(w)
+	encoder.Indent("", "  ")
+	err = encoder.Encode(info)
 	if err != nil {
 		return err
 	}
