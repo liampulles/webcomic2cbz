@@ -19,6 +19,9 @@ builds:
       - amd64
       - "386"
 
+archives:
+  - formats: ["binary"]
+
 changelog:
   sort: asc
   filters:
