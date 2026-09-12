@@ -13,6 +13,7 @@ import (
 	"strings"
 	"text/template"
 
+	szip "github.com/STARRY-S/zip"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -23,16 +24,6 @@ var configRegex = regexp.MustCompile(`^webcomic2cbz\.(?:yml|yaml)$`)
 var cbzRegex = regexp.MustCompile(`^.*\.cbz$`)
 var idxImageRegex = regexp.MustCompile(`^(\d+)\.(?:jpg|png|jpeg|gif|bmp|webp)$`)
 var imageRegex = regexp.MustCompile(`^.*\.(?:jpg|png|jpeg|gif|bmp|webp)$`)
-
-// --- Lock keys
-
-func cbzDirLockKey(dir string) string {
-	return filepath.Join(dir, "cbz-dir.lock")
-}
-
-func cbzFileLockKey(cbzPath string) string {
-	return fmt.Sprintf("%s.lock", cbzPath)
-}
 
 // --- Main logic
 
@@ -105,7 +96,10 @@ func configProcessJob(cfgPath string) Job {
 		}
 
 		// Source missing webcomics
-		SourceWebcomics(cfg, allIdx, cfgDir)
+		sourced := SourceWebcomics(cfg, allIdx, cfgDir)
+
+		// Update existing cbz
+		updateExistingCBZs(cfg, cbzItems, sourced)
 	}
 }
 
@@ -156,6 +150,97 @@ func existingCBZProcess(cbzPath string, number int, cfg Config) ([]int, error) {
 	}
 
 	return imageIdx, nil
+}
+
+func updateExistingCBZs(cfg Config, cbzItems []cbzItem, sourced []Sourced) {
+	for _, cbzItem := range cbzItems {
+		err := updateExistingCBZ(cfg, cbzItem, sourced)
+		if err != nil {
+			log.Err(err).
+				Str("cbz", cbzItem.Path).
+				Msg("could not update this cbz, will continue to the next one")
+			continue
+		}
+	}
+}
+
+func updateExistingCBZ(cfg Config, cbzItem cbzItem, sourced []Sourced) error {
+	// What range of webcomics applies to this cbz?
+	start, end := issueIdxRange(cbzItem.Number, cfg)
+
+	// Filter sourced images by that
+	var filtered []Sourced
+	for _, item := range sourced {
+		if item.Idx < start || item.Idx > end {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+
+	// Short circuit if nothing to do here.
+	if len(filtered) == 0 {
+		return nil
+	}
+
+	// Open the zip for writing
+	log.Info().Str("path", cbzItem.Path).Msg("updating with sourced images")
+	f, err := os.OpenFile("test.zip", os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	zu, err := szip.NewUpdater(f)
+	if err != nil {
+		return err
+	}
+	defer zu.Close()
+
+	// Append each filtered image
+	for _, item := range sourced {
+		// What filename to use? We're putting it directly at the top level.
+		ext := filepath.Ext(item.Path)
+		base := fmt.Sprintf("%d%s", item.Idx, ext)
+
+		// Get a reference to the embedded file in the zip
+		ef, err := zu.Append(base, szip.APPEND_MODE_OVERWRITE)
+		if err != nil {
+			log.Err(err).
+				Str("cbz", cbzItem.Path).
+				Msgf("could not write image %d, will skip this one", item.Idx)
+			continue
+		}
+
+		// Open the sourced file on disk
+		inf, err := os.Open(item.Path)
+		if err != nil {
+			log.Err(err).
+				Str("path", item.Path).
+				Msg("could not open sourced image, will skip this one")
+			continue
+		}
+
+		// Copy the bytes over
+		_, err = io.Copy(ef, inf)
+		if err != nil {
+			log.Err(err).
+				Str("cbz", cbzItem.Path).
+				Str("img_path", item.Path).
+				Msg("could not copy bytes over, will skip this one")
+			continue
+		}
+
+		// Remove the sourced image
+		inf.Close()
+		err = os.Remove(item.Path)
+		if err != nil {
+			log.Err(err).
+				Str("img_path", item.Path).
+				Msg("could not remove the sourced image, will leave it as is")
+			continue
+		}
+	}
+
+	return nil
 }
 
 // Inclusive on both sides
