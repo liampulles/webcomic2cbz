@@ -18,9 +18,6 @@
   <a href="https://github.com/liampulles/webcomic2cbz/releases">
     <img src="https://img.shields.io/github/release/liampulles/webcomic2cbz.svg" alt="[GitHub release]">
   </a>
-  <a href="https://travis-ci.com/liampulles/webcomic2cbz">
-    <img src="https://travis-ci.com/liampulles/webcomic2cbz.svg?branch=master" alt="[Build Status]">
-  </a>
   <img alt="GitHub go.mod Go version" src="https://img.shields.io/github/go-mod/go-version/liampulles/webcomic2cbz">
   <a href="https://github.com/liampulles/webcomic2cbz/blob/master/LICENSE.md">
     <img src="https://img.shields.io/github/license/liampulles/webcomic2cbz.svg" alt="[License]">
@@ -66,6 +63,14 @@ source:
         basename_glob: "*.png"
         basename_format: "{{.Idx}}.png"
         idx_regex: ^([0-9]+)$
+    - imgfiles:
+        basename_glob: "*.jpg"
+        basename_format: "{{.Idx}}.jpg"
+        idx_regex: ^([0-9]+)$
+    - imgfiles:
+        basename_glob: "*.gif"
+        basename_format: "{{.Idx}}.gif"
+        idx_regex: ^([0-9]+)$
     - httpdirect:
         url_format: https://www.questionablecontent.net/comics/{{.Idx}}.png
         basename_format: "{{.Idx}}.png"
@@ -73,32 +78,31 @@ source:
           # Match the <img id="strip"> element and capture the numeric comic index,
           # regardless of the image file extension.
           homepage_regex: '<img[^>]+id=["'']strip["''][^>]+src=["''][^"'']*/comics/([0-9]+)\.[^"'']+["'']'
+    - httpdirect:
+        url_format: https://www.questionablecontent.net/comics/{{.Idx}}.jpg
+        basename_format: "{{.Idx}}.jpg"
+        latest_rule:
+          homepage_regex: '<img[^>]+id=["'']strip["''][^>]+src=["''][^"'']*/comics/([0-9]+)\.[^"'']+["'']'
+    - httpdirect:
+        url_format: https://www.questionablecontent.net/comics/{{.Idx}}.gif
+        basename_format: "{{.Idx}}.gif"
+        latest_rule:
+          homepage_regex: '<img[^>]+id=["'']strip["''][^>]+src=["''][^"'']*/comics/([0-9]+)\.[^"'']+["'']'
 ```
 
 ## Internals
 
-This is (roughly speaking) how the program works, at time of writing:
+The rough algorithm of the program is as follows:
 
-### Main algorithm
-
-1. Scan the given directory recursively for `webcomic2cbz.yml` files. We call each found containing directory a "source dir".
-1. Handle each source dir concurrently:
-    1. Look for CBZ files in the source dir, and and use this to build the set of "done" webcomics.
-        1. Enqueue a `ComicInfo.xml` for each found cbz as well (see below).
-    1. Start with the top-most source (in the yaml).
-        1. If the source is capable of providing the set of webcomics "available" directly, then compute the diff with the "done" set, and enqueue each item in the diff set.
-        1. Else, calculate the diff between the done set and (1..999999), order the set, and probe the source for each missing item in the diff.
-        1. If a source cannot provide more images, move on to the next source. When we run out of sources, stop.
-
-### Job queues
-
-There are several ordered worker queues, which can be provisioned dynamically. Typically a given source dir will provision a queue for `ComicInfo.xml` updates, and a queue for webcomic updates.
-
-Each queue has 1 worker, but all the queues run concurrently with each other.
-
-Queues can acquire file locks, if they need to deal with files. This prevents other queues and other `webcomic2cbz` processes from touching them.
-
-The program stops when all the queues are finished. The main algorithm itself is a queue.
+1. Recursively scan the working directory for `webcomic2cbz.yml` files. Any files we find, we consider the enclosing directory to be a webcomic directory - meaning it contains pertinent CBZ files and source images.
+1. Scan for existing CBZ.
+  1. Sometimes the CBZ needs to be "undone" here, mainly if you are changing chunk sizes. In that case, we extract its webcomic images and delete the CBZ. Those extracted images can be reused later.
+  1. Otherwise, we can ensure the enclosed `ComicInfo.xml` is up to date.
+  1. We also track what webcomics the CBZs enclose here.
+1. Try and source missing webcomics.
+  1. This will go through the config source sections in order, trying to pull as many images as possible for a source before moving to the next.
+1. Update existing CBZ for sourced webcomics.
+1. Create new CBZ for sourced webcomics.
 
 ## Contributing
 
