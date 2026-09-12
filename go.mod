@@ -7,7 +7,7 @@ require (
 	github.com/antchfx/htmlquery v1.3.6
 	github.com/antchfx/xpath v1.3.8
 	github.com/rs/zerolog v1.35.1
-	go.yaml.in/yaml/v4 v4.0.0-rc.6
+	go.yaml.in/yaml/v3 v3.0.5
 )
 
 require (

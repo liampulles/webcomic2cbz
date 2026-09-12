@@ -4,7 +4,7 @@ import (
 	"os"
 	"time"
 
-	"go.yaml.in/yaml/v4"
+	"go.yaml.in/yaml/v3"
 )
 
 const ConfigName = "webcomic2cbz.yml"
