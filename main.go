@@ -22,7 +22,10 @@ import (
 // TODO: Consistently change naming of Volume -> Number
 // TODO: Remove locking refs
 // TODO: Create some common templating helpers
-// TODO: Common zip operations file
+// TODO: Common zip operations
+// TODO: Start with Number 0?
+// TODO: Consistent filename formatting helpers
+// TODO: Fix README
 
 // --- Regex
 
@@ -85,21 +88,19 @@ func configProcessJob(cfgPath string) Job {
 		// track what webcomics we actually have. If the existing CBZs don't line up with
 		// our chunking config, then extract the images and delete them (they'll be recreated
 		// later).
-		cbzImgIdxs, err := DoConcurrentProcess(5, cbzItems, func(cbz cbzItem) ([]int, error) {
-			imgIdxs, err := existingCBZProcess(cbz.Path, cbz.Number, cfg)
-			if err != nil {
-				return nil, fmt.Errorf("%s: %w", cbz.Path, err)
-			}
-			return imgIdxs, nil
-		})
-		if err != nil {
-			log.Err(err).Str("path", cfgPath).Msg("could not read some cbzs - skipping webcomic.")
-			return
-		}
 		var allIdx []int
-		for _, imgIdxs := range cbzImgIdxs {
-			allIdx = append(allIdx, imgIdxs...)
+		var keepCbz []cbzItem
+		for _, cbz := range cbzItems {
+			imgIdxs, ignoreCBZ, err := existingCBZProcess(cbz.Path, cbz.Number, cfg)
+			if err != nil {
+				log.Err(err).Str("path", cfgPath).Msg("could not read a cbz - skipping.")
+			}
+			if !ignoreCBZ {
+				keepCbz = append(keepCbz, cbz)
+				allIdx = append(allIdx, imgIdxs...)
+			}
 		}
+		cbzItems = keepCbz
 
 		// Source missing webcomics
 		sourced := SourceWebcomics(cfg, allIdx, cfgDir)
@@ -122,11 +123,11 @@ func configProcessJob(cfgPath string) Job {
 
 // --- Helper funcs
 
-func existingCBZProcess(cbzPath string, number int, cfg Config) ([]int, error) {
+func existingCBZProcess(cbzPath string, number int, cfg Config) ([]int, bool, error) {
 	// Read the cbz
 	imageIdx, others, err := readCBZImageIdx(cbzPath)
 	if err != nil {
-		return nil, err
+		return nil, true, err
 	}
 
 	// See if the found idx line up with our expectations. And if there are other images,
@@ -155,17 +156,17 @@ func existingCBZProcess(cbzPath string, number int, cfg Config) ([]int, error) {
 			panic(err)
 		}
 		// We report no files existing in this cbz - because it does not exist anymore.
-		return nil, nil
+		return nil, true, nil
 	}
 
 	// Update ComicInfo
 	info := CreateComicInfo(cfg, number)
 	err = UpsertComicInfo(cbzPath, info)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
-	return imageIdx, nil
+	return imageIdx, false, nil
 }
 
 func updateExistingCBZs(cfg Config, cbzItems []cbzItem, sourced []Sourced) []cbzItem {
@@ -204,7 +205,7 @@ func updateExistingCBZ(cfg Config, cbzItem cbzItem, sourced []Sourced) (bool, er
 
 	// Open the zip for writing
 	log.Info().Str("path", cbzItem.Path).Msg("updating with sourced images")
-	f, err := os.OpenFile("test.zip", os.O_RDWR, 0)
+	f, err := os.OpenFile(cbzItem.Path, os.O_RDWR, 0)
 	if err != nil {
 		return true, err
 	}
@@ -216,7 +217,7 @@ func updateExistingCBZ(cfg Config, cbzItem cbzItem, sourced []Sourced) (bool, er
 	defer zu.Close()
 
 	// Append each filtered image
-	for _, item := range sourced {
+	for _, item := range filtered {
 		// What filename to use? We're putting it directly at the top level.
 		ext := filepath.Ext(item.Path)
 		base := fmt.Sprintf("%d%s", item.Idx, ext)
