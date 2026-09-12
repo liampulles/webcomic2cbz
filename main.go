@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"io/fs"
@@ -17,6 +18,11 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
+
+// TODO: Consistently change naming of Volume -> Number
+// TODO: Remove locking refs
+// TODO: Create some common templating helpers
+// TODO: Common zip operations file
 
 // --- Regex
 
@@ -98,8 +104,19 @@ func configProcessJob(cfgPath string) Job {
 		// Source missing webcomics
 		sourced := SourceWebcomics(cfg, allIdx, cfgDir)
 
+		// We can short circuit now if we got nothing
+		if len(sourced) == 0 {
+			log.Info().
+				Str("dir", cfgDir).
+				Msgf("no new webcomics found for %s - shorting", cfg.Title)
+			return
+		}
+
 		// Update existing cbz
-		updateExistingCBZs(cfg, cbzItems, sourced)
+		handled := updateExistingCBZs(cfg, cbzItems, sourced)
+
+		// Create new cbz
+		createNewCBZs(cfgDir, cfg, handled, sourced)
 	}
 }
 
@@ -107,7 +124,6 @@ func configProcessJob(cfgPath string) Job {
 
 func existingCBZProcess(cbzPath string, number int, cfg Config) ([]int, error) {
 	// Read the cbz
-	log.Info().Str("path", cbzPath).Msg("reading cbz...")
 	imageIdx, others, err := readCBZImageIdx(cbzPath)
 	if err != nil {
 		return nil, err
@@ -152,19 +168,23 @@ func existingCBZProcess(cbzPath string, number int, cfg Config) ([]int, error) {
 	return imageIdx, nil
 }
 
-func updateExistingCBZs(cfg Config, cbzItems []cbzItem, sourced []Sourced) {
+func updateExistingCBZs(cfg Config, cbzItems []cbzItem, sourced []Sourced) []cbzItem {
+	var pertinent []cbzItem
 	for _, cbzItem := range cbzItems {
-		err := updateExistingCBZ(cfg, cbzItem, sourced)
+		pertaining, err := updateExistingCBZ(cfg, cbzItem, sourced)
+		if pertaining {
+			pertinent = append(pertinent, cbzItem)
+		}
 		if err != nil {
 			log.Err(err).
 				Str("cbz", cbzItem.Path).
 				Msg("could not update this cbz, will continue to the next one")
-			continue
 		}
 	}
+	return pertinent
 }
 
-func updateExistingCBZ(cfg Config, cbzItem cbzItem, sourced []Sourced) error {
+func updateExistingCBZ(cfg Config, cbzItem cbzItem, sourced []Sourced) (bool, error) {
 	// What range of webcomics applies to this cbz?
 	start, end := issueIdxRange(cbzItem.Number, cfg)
 
@@ -179,19 +199,19 @@ func updateExistingCBZ(cfg Config, cbzItem cbzItem, sourced []Sourced) error {
 
 	// Short circuit if nothing to do here.
 	if len(filtered) == 0 {
-		return nil
+		return false, nil
 	}
 
 	// Open the zip for writing
 	log.Info().Str("path", cbzItem.Path).Msg("updating with sourced images")
 	f, err := os.OpenFile("test.zip", os.O_RDWR, 0)
 	if err != nil {
-		return err
+		return true, err
 	}
 	defer f.Close()
 	zu, err := szip.NewUpdater(f)
 	if err != nil {
-		return err
+		return true, err
 	}
 	defer zu.Close()
 
@@ -240,6 +260,121 @@ func updateExistingCBZ(cfg Config, cbzItem cbzItem, sourced []Sourced) error {
 		}
 	}
 
+	return true, nil
+}
+
+type numberToBuild struct {
+	Number  int
+	Sources []Sourced
+}
+
+func createNewCBZs(dir string, cfg Config, handled []cbzItem, sourced []Sourced) {
+	// Which issue numbers have been handled
+	handledNumbers := make(map[int]bool)
+	for _, item := range handled {
+		handledNumbers[item.Number] = true
+	}
+
+	// Given our sourced images, which numbers can we then make?
+	numbersToBuildMap := make(map[int]numberToBuild)
+	for _, item := range sourced {
+		number := issueNumberForIdx(item.Idx, cfg)
+		if handledNumbers[number] {
+			continue
+		}
+		prospect := numbersToBuildMap[number]
+		prospect.Number = number
+		prospect.Sources = append(prospect.Sources, item)
+		numbersToBuildMap[number] = prospect
+	}
+
+	// Go and make them
+	for _, item := range numbersToBuildMap {
+		err := createNewCBZ(dir, cfg, item)
+		if err != nil {
+			log.Err(err).
+				Int("number", item.Number).
+				Msg("could not create new cbz - continuing")
+		}
+	}
+}
+
+func createNewCBZ(dir string, cfg Config, item numberToBuild) error {
+	// What is the path?
+	name, err := cbzTitle(dir, cfg, item.Number)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, name) + ".cbz"
+
+	// Open file for writing
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	zipW := zip.NewWriter(f)
+	defer zipW.Close()
+
+	// Write a ComicInfo.xml
+	info := CreateComicInfo(cfg, item.Number)
+	infoF, err := zipW.Create("ComicInfo.xml")
+	if err != nil {
+		return err
+	}
+	xmlE := xml.NewEncoder(infoF)
+	xmlE.Indent("", "  ")
+	err = xmlE.Encode(info)
+	if err != nil {
+		return err
+	}
+
+	// Write each sourced image
+	for _, item := range item.Sources {
+		// What filename to use? We're putting it directly at the top level.
+		ext := filepath.Ext(item.Path)
+		base := fmt.Sprintf("%d%s", item.Idx, ext)
+
+		// Open the sourced image
+		inf, err := os.Open(item.Path)
+		if err != nil {
+			log.Err(err).
+				Str("path", item.Path).
+				Msg("could not open sourced image, will skip this one")
+			continue
+		}
+
+		// Open an embedded zip file
+		zipF, err := zipW.Create(base)
+		if err != nil {
+			log.Err(err).
+				Str("cbz", path).
+				Msgf("could not write image %d, will skip this one", item.Idx)
+			continue
+		}
+
+		// Copy the bytes over
+		_, err = io.Copy(zipF, inf)
+		if err != nil {
+			log.Err(err).
+				Str("cbz", path).
+				Str("img_path", item.Path).
+				Msg("could not copy bytes over, will skip this one")
+			continue
+		}
+
+		// Remove the sourced image
+		inf.Close()
+		err = os.Remove(item.Path)
+		if err != nil {
+			log.Err(err).
+				Str("img_path", item.Path).
+				Msg("could not remove the sourced image, will leave it as is")
+			continue
+		}
+	}
+
+	log.Info().Str("path", path).Msg("finishing up new cbz...")
 	return nil
 }
 
@@ -249,6 +384,11 @@ func issueIdxRange(number int, cfg Config) (int, int) {
 	start := ((number - 1) * chunk) + 1
 	end := number * chunk
 	return start, end
+}
+
+func issueNumberForIdx(idx int, cfg Config) int {
+	chunk := cfg.Cbz.ChunkSize
+	return ((idx - 1) / chunk) + 1
 }
 
 func extractCBZIdxImages(cbzPath string) {
@@ -379,7 +519,7 @@ func filterMatchingCBZ(cfgDir string, cfg Config, all []os.DirEntry) ([]cbzItem,
 	return keep, nil
 }
 
-func cbzTitle(cfgDir string, cfg Config, volume int) (string, error) {
+func cbzTitle(cfgDir string, cfg Config, number int) (string, error) {
 	// TODO: Could possibly cache built templates, if needed.
 	// Define the template
 	tmpl, err := template.New("cbz").Parse(cfg.Cbz.NamingTemplate)
@@ -396,7 +536,7 @@ func cbzTitle(cfgDir string, cfg Config, volume int) (string, error) {
 		Volume int
 	}{
 		Title:  cfg.Title,
-		Volume: volume,
+		Volume: number,
 	}
 
 	// Execute the template
