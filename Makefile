@@ -29,7 +29,7 @@ clean:
 # git push origin v0.1.0
 #
 # You'll also need to setup release.env, see release.env.sample
-release: pre-commit $(GOBIN)/goreleaser
+release: $(GOBIN)/goreleaser
 	goreleaser release --clean
 
 
