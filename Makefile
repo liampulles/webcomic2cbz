@@ -1,6 +1,6 @@
 #!make
 include release.env
-export $(shell sed 's/=.*//' envfile)
+export $(shell sed 's/=.*//' release.env)
 
 # Init variables
 GOBIN := $(shell go env GOBIN)
