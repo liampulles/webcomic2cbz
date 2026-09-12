@@ -1,3 +1,7 @@
+#!make
+include release.env
+export $(shell sed 's/=.*//' envfile)
+
 # Init variables
 GOBIN := $(shell go env GOBIN)
 
@@ -20,3 +24,15 @@ pre-commit: update clean coverage.txt
 	go mod tidy
 clean:
 	rm -f coverage.txt $(GOBIN)/webcomic2cbz
+# Make a git tag first!
+# git tag -a v0.1.0 -m "First release"
+# git push origin v0.1.0
+#
+# You'll also need to setup release.env, see release.env.sample
+release: pre-commit $(GOBIN)/goreleaser
+	goreleaser release --clean
+
+
+# Needed tools
+$(GOBIN)/goreleaser:
+	go install github.com/goreleaser/goreleaser/v2@latest
