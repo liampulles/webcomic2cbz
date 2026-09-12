@@ -31,13 +31,24 @@ type SourceConfig struct {
 		BasenameFormat string `yaml:"basename_format"`
 		IdxRegex       string `yaml:"idx_regex"`
 	} `yaml:"imgfiles,omitempty"`
+
 	Httpdirect struct {
-		URLFormat      string `yaml:"url_format"`
-		BasenameFormat string `yaml:"basename_format"`
-		LatestRule     struct {
-			HomepageRegex string `yaml:"homepage_regex"`
-		} `yaml:"latest_rule"`
+		URLFormat      string           `yaml:"url_format"`
+		BasenameFormat string           `yaml:"basename_format"`
+		LatestRule     LatestRuleConfig `yaml:"latest_rule"`
 	} `yaml:"httpdirect,omitempty"`
+
+	Htmltemplatescan struct {
+		URLFormat      string           `yaml:"url_format"`
+		BasenameFormat string           `yaml:"basename_format"`
+		ImgXPath       string           `yaml:"img_xpath"`
+		LatestRule     LatestRuleConfig `yaml:"latest_rule"`
+	} `yaml:"htmltemplatescan,omitempty"`
+}
+
+type LatestRuleConfig struct {
+	HomepageRegex string `yaml:"homepage_regex"`
+	HomepageXPath string `yaml:"homepage_xpath"`
 }
 
 func ParseConfig(path string) (Config, error) {

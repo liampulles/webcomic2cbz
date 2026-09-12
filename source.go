@@ -33,7 +33,7 @@ var sourceSetups []sourceSetupFn = []sourceSetupFn{
 
 type HTTPDirectSource struct {
 	imgDir           string
-	homepageRegex    *regexp.Regexp
+	latestRule       LatestRule
 	homepage         string
 	urlTemplate      *template.Template
 	basenameTemplate *template.Template
@@ -44,9 +44,9 @@ func tryHTTPDirectSource(srcCfg SourceConfig, cfg Config, dir string) (bool, Sou
 		return false, nil, nil
 	}
 
-	homepageRegex, err := regexp.Compile(srcCfg.Httpdirect.LatestRule.HomepageRegex)
+	latestRule, err := newLatestRule(srcCfg.Httpdirect.LatestRule, cfg)
 	if err != nil {
-		return true, nil, fmt.Errorf("homepage regex: %w", err)
+		return true, nil, err
 	}
 
 	urlTemplate, err := template.New("url").Parse(srcCfg.Httpdirect.URLFormat)
@@ -61,7 +61,7 @@ func tryHTTPDirectSource(srcCfg SourceConfig, cfg Config, dir string) (bool, Sou
 
 	source := &HTTPDirectSource{
 		imgDir:           dir,
-		homepageRegex:    homepageRegex,
+		latestRule:       latestRule,
 		homepage:         cfg.Homepage,
 		urlTemplate:      urlTemplate,
 		basenameTemplate: basenameTemplate,
@@ -82,19 +82,9 @@ func (h *HTTPDirectSource) FetchConcurrency() int {
 // We assume a site has all the comics available, thus this is mainly
 // a task of figuring out the latest.
 func (h *HTTPDirectSource) Available() ([]int, error) {
-	bytes, err := getBytes(h.homepage)
+	latest, err := h.latestRule.Latest()
 	if err != nil {
 		return nil, err
-	}
-
-	found := h.homepageRegex.FindSubmatch(bytes)
-	if found == nil {
-		return nil, errors.New("homepage regex: no match found, check your config")
-	}
-
-	latest, err := strconv.Atoi(string(found[1]))
-	if err != nil {
-		return nil, errors.New("homepage regex: not selecting an integer, check your config")
 	}
 
 	available := make([]int, latest)
@@ -270,6 +260,77 @@ func (i *ImgFilesSource) Fetch(idx int) (string, error) {
 	}
 
 	return path, nil
+}
+
+// --- LatestRule
+
+type LatestRule interface {
+	Latest() (int, error)
+}
+
+type latestRuleSetupFn func(LatestRuleConfig, Config) (bool, LatestRule, error)
+
+var latestRuleSetups []latestRuleSetupFn = []latestRuleSetupFn{
+	tryHomepageRegexLatestRule,
+}
+
+type HomepageRegexLatestRule struct {
+	homepage string
+	re       *regexp.Regexp
+}
+
+var _ LatestRule = &HomepageRegexLatestRule{}
+
+func (r *HomepageRegexLatestRule) Latest() (int, error) {
+	bytes, err := getBytes(r.homepage)
+	if err != nil {
+		return 0, err
+	}
+
+	found := r.re.FindSubmatch(bytes)
+	if found == nil {
+		return 0, errors.New("homepage regex: no match found, check your config")
+	}
+
+	latest, err := strconv.Atoi(string(found[1]))
+	if err != nil {
+		return 0, errors.New("homepage regex: not selecting an integer, check your config")
+	}
+
+	return latest, nil
+}
+
+func tryHomepageRegexLatestRule(latestConfig LatestRuleConfig, cfg Config) (bool, LatestRule, error) {
+	if latestConfig.HomepageRegex == "" {
+		return false, nil, nil
+	}
+
+	re, err := regexp.Compile(latestConfig.HomepageRegex)
+	if err != nil {
+		return true, nil, fmt.Errorf("homepage regex: %w", err)
+	}
+
+	rule := &HomepageRegexLatestRule{
+		homepage: cfg.Homepage,
+		re:       re,
+	}
+	return true, rule, nil
+}
+
+func newLatestRule(latestConfig LatestRuleConfig, cfg Config) (LatestRule, error) {
+	// Try each
+	for _, setup := range latestRuleSetups {
+		applies, rule, err := setup(latestConfig, cfg)
+		if !applies {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		return rule, nil
+	}
+
+	return nil, errors.New("no latest rule configured- adjust config.")
 }
 
 // --- General
