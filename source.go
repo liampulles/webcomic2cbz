@@ -229,9 +229,10 @@ func (h *HTMLTemplateScan) Fetch(idx int) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	matches := h.imgRe.FindSubmatch(htmlBytes)
 	if matches == nil {
-		return "", fmt.Errorf("img regex: %w", err)
+		return "", errors.New("img regex: not matching, check config")
 	}
 	url := string(matches[1])
 
