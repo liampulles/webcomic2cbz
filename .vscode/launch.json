@@ -10,7 +10,7 @@
             "request": "launch",
             "mode": "auto",
             "program": "${fileDirname}",
-            "cwd": "/home/liam/Development/data/testwebcomic/"
+            "cwd": "/home/liam/Development/data"
         }
     ]
 }

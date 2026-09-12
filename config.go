@@ -41,14 +41,13 @@ type SourceConfig struct {
 	Htmltemplatescan struct {
 		URLFormat      string           `yaml:"url_format"`
 		BasenameFormat string           `yaml:"basename_format"`
-		ImgXPath       string           `yaml:"img_xpath"`
+		ImgRegex       string           `yaml:"img_regex"`
 		LatestRule     LatestRuleConfig `yaml:"latest_rule"`
 	} `yaml:"htmltemplatescan,omitempty"`
 }
 
 type LatestRuleConfig struct {
 	HomepageRegex string `yaml:"homepage_regex"`
-	HomepageXPath string `yaml:"homepage_xpath"`
 }
 
 func ParseConfig(path string) (Config, error) {

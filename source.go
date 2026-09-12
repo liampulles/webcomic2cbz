@@ -11,9 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"text/template"
+	"time"
 
-	"github.com/antchfx/htmlquery"
-	"github.com/antchfx/xpath"
 	"github.com/rs/zerolog/log"
 )
 
@@ -29,13 +28,15 @@ type sourceSetupFn func(SourceConfig, Config, string) (bool, Source, error)
 var sourceSetups []sourceSetupFn = []sourceSetupFn{
 	tryHTTPDirectSource,
 	tryImgFilesSource,
+	tryHTMLTemplateScan,
 }
 
 // --- HTTPDirectSource
 
 type HTTPDirectSource struct {
+	LatestRuleSourcer
+
 	imgDir           string
-	latestRule       LatestRule
 	homepage         string
 	urlTemplate      *template.Template
 	basenameTemplate *template.Template
@@ -62,11 +63,11 @@ func tryHTTPDirectSource(srcCfg SourceConfig, cfg Config, dir string) (bool, Sou
 	}
 
 	source := &HTTPDirectSource{
-		imgDir:           dir,
-		latestRule:       latestRule,
-		homepage:         cfg.Homepage,
-		urlTemplate:      urlTemplate,
-		basenameTemplate: basenameTemplate,
+		LatestRuleSourcer: LatestRuleSourcer{latestRule},
+		imgDir:            dir,
+		homepage:          cfg.Homepage,
+		urlTemplate:       urlTemplate,
+		basenameTemplate:  basenameTemplate,
 	}
 	return true, source, nil
 }
@@ -79,22 +80,6 @@ func (h *HTTPDirectSource) Name() string {
 
 func (h *HTTPDirectSource) FetchConcurrency() int {
 	return 20
-}
-
-// We assume a site has all the comics available, thus this is mainly
-// a task of figuring out the latest.
-func (h *HTTPDirectSource) Available() ([]int, error) {
-	latest, err := h.latestRule.Latest()
-	if err != nil {
-		return nil, err
-	}
-
-	available := make([]int, latest)
-	// We assume webcomics start at idx 1.
-	for i := 1; i <= latest; i++ {
-		available[i-1] = i
-	}
-	return available, nil
 }
 
 func (h *HTTPDirectSource) Fetch(idx int) (string, error) {
@@ -111,15 +96,6 @@ func (h *HTTPDirectSource) Fetch(idx int) (string, error) {
 	}
 	url := b.String()
 
-	// Download to a temp file
-	tmpPath, err := getTempFile(url)
-	if err != nil {
-		return "", err
-	}
-
-	// Move it to the comic dir with an appropriate name
-	// (so it can potentially be used by image source)
-
 	// Figure out path
 	var b2 strings.Builder
 	err = h.basenameTemplate.Execute(&b2, data)
@@ -129,34 +105,151 @@ func (h *HTTPDirectSource) Fetch(idx int) (string, error) {
 	base := b2.String()
 	path := filepath.Join(h.imgDir, base)
 
+	err = fetchHTTPImg(url, path)
+	if err != nil {
+		return "", err
+	}
+
+	return path, nil
+}
+
+func fetchHTTPImg(url string, path string) error {
+	// Download to a temp file
+	tmpPath, err := getTempFile(url)
+	if err != nil {
+		return err
+	}
+
+	// Move it to the comic dir with an appropriate name
+	// (so it can potentially be used by image source)
+
 	// Create a file
 	of, err := os.Create(path)
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer of.Close()
 
 	// Open the temporary file
 	inf, err := os.Open(tmpPath)
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer inf.Close()
 
 	// Copy
 	_, err = io.Copy(of, inf)
 	if err != nil {
-		return "", err
+		return err
 	}
 
 	// Delete the temp file (but don't fail if we can't)
 	os.Remove(tmpPath)
 
 	log.Info().
-		Str("source", h.Name()).
-		Int("idx", idx).
 		Str("path", path).
 		Msg("fetch succeeded.")
+	return nil
+}
+
+// --- HTMLTemplateScan
+
+type HTMLTemplateScan struct {
+	LatestRuleSourcer
+
+	imgDir           string
+	homepage         string
+	urlTemplate      *template.Template
+	basenameTemplate *template.Template
+	imgRe            *regexp.Regexp
+}
+
+func tryHTMLTemplateScan(srcCfg SourceConfig, cfg Config, dir string) (bool, Source, error) {
+	if srcCfg.Htmltemplatescan.URLFormat == "" {
+		return false, nil, nil
+	}
+
+	latestRule, err := newLatestRule(srcCfg.Htmltemplatescan.LatestRule, cfg)
+	if err != nil {
+		return true, nil, err
+	}
+
+	urlTemplate, err := template.New("url").Parse(srcCfg.Htmltemplatescan.URLFormat)
+	if err != nil {
+		return true, nil, fmt.Errorf("url template: %w", err)
+	}
+
+	basenameTemplate, err := template.New("basename").Parse(srcCfg.Htmltemplatescan.BasenameFormat)
+	if err != nil {
+		return true, nil, fmt.Errorf("basename format: %w", err)
+	}
+
+	imgRe, err := regexp.Compile(srcCfg.Htmltemplatescan.ImgRegex)
+	if err != nil {
+		return true, nil, fmt.Errorf("img regex: %w", err)
+	}
+
+	source := &HTMLTemplateScan{
+		LatestRuleSourcer: LatestRuleSourcer{latestRule},
+		imgDir:            dir,
+		homepage:          cfg.Homepage,
+		urlTemplate:       urlTemplate,
+		basenameTemplate:  basenameTemplate,
+		imgRe:             imgRe,
+	}
+	return true, source, nil
+}
+
+var _ Source = &HTMLTemplateScan{}
+
+func (h *HTMLTemplateScan) Name() string {
+	return "HTMLTemplateScan"
+}
+
+func (h *HTMLTemplateScan) FetchConcurrency() int {
+	return 20
+}
+
+func (h *HTMLTemplateScan) Fetch(idx int) (string, error) {
+	// Figure out html page url
+	var b strings.Builder
+	data := struct {
+		Idx int
+	}{
+		Idx: idx,
+	}
+	err := h.urlTemplate.Execute(&b, data)
+	if err != nil {
+		return "", err
+	}
+	htmlURL := b.String()
+
+	// Resolve comic http from regex
+	htmlBytes, err := getBytes(htmlURL)
+	if err != nil {
+		return "", err
+	}
+	matches := h.imgRe.FindSubmatch(htmlBytes)
+	if matches == nil {
+		return "", fmt.Errorf("img regex: %w", err)
+	}
+	url := string(matches[1])
+
+	// Figure out file path
+	var b2 strings.Builder
+	err = h.basenameTemplate.Execute(&b2, data)
+	if err != nil {
+		return "", err
+	}
+	base := b2.String()
+	path := filepath.Join(h.imgDir, base)
+
+	// Download
+	err = fetchHTTPImg(url, path)
+	if err != nil {
+		return "", err
+	}
+
 	return path, nil
 }
 
@@ -274,7 +367,24 @@ type latestRuleSetupFn func(LatestRuleConfig, Config) (bool, LatestRule, error)
 
 var latestRuleSetups []latestRuleSetupFn = []latestRuleSetupFn{
 	tryHomepageRegexLatestRule,
-	tryHomepageXPathLatestRule,
+}
+
+type LatestRuleSourcer struct {
+	rule LatestRule
+}
+
+func (l LatestRuleSourcer) Available() ([]int, error) {
+	latest, err := l.rule.Latest()
+	if err != nil {
+		return nil, err
+	}
+
+	available := make([]int, latest)
+	// We assume webcomics start at idx 1.
+	for i := 1; i <= latest; i++ {
+		available[i-1] = i
+	}
+	return available, nil
 }
 
 func newLatestRule(latestConfig LatestRuleConfig, cfg Config) (LatestRule, error) {
@@ -334,47 +444,6 @@ func tryHomepageRegexLatestRule(latestConfig LatestRuleConfig, cfg Config) (bool
 	rule := &HomepageRegexLatestRule{
 		homepage: cfg.Homepage,
 		re:       re,
-	}
-	return true, rule, nil
-}
-
-// --- HomepageXPathLatestRule
-
-type HomepageXPathLatestRule struct {
-	homepage string
-	xpath    *xpath.Expr
-}
-
-var _ LatestRule = &HomepageXPathLatestRule{}
-
-func (h *HomepageXPathLatestRule) Latest() (int, error) {
-	doc, err := htmlquery.LoadURL(h.homepage)
-	if err != nil {
-		return 0, fmt.Errorf("homepage xpath: %w", err)
-	}
-
-	f := h.xpath.Evaluate(htmlquery.CreateXPathNavigator(doc)).(float64)
-	idx := int(f)
-	if idx <= 0 {
-		return 0, errors.New("homepage xpath: invalid, not producing a valid idx")
-	}
-
-	return idx, nil
-}
-
-func tryHomepageXPathLatestRule(latestConfig LatestRuleConfig, cfg Config) (bool, LatestRule, error) {
-	if latestConfig.HomepageXPath == "" {
-		return false, nil, nil
-	}
-
-	expr, err := xpath.Compile(latestConfig.HomepageXPath)
-	if err != nil {
-		return true, nil, fmt.Errorf("homepage xpath: %w", err)
-	}
-
-	rule := &HomepageXPathLatestRule{
-		homepage: cfg.Homepage,
-		xpath:    expr,
 	}
 	return true, rule, nil
 }
@@ -469,8 +538,35 @@ func Diff[T comparable](base, sub []T) []T {
 	return diff
 }
 
+var client = &http.Client{
+	Timeout: 15 * time.Second,
+}
+
+func prepGet(url string) (*http.Request, error) {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("http: %w", err)
+	}
+
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-ZA,en;q=0.9")
+	req.Header.Set("Upgrade-Insecure-Requests", "1")
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-Site", "none")
+	req.Header.Set("Sec-Fetch-User", "?1")
+
+	return req, nil
+}
+
 func getBytes(url string) ([]byte, error) {
-	resp, err := http.Get(url)
+	req, err := prepGet(url)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("http: %w", err)
 	}
@@ -488,7 +584,12 @@ func getBytes(url string) ([]byte, error) {
 }
 
 func getTempFile(url string) (string, error) {
-	resp, err := http.Get(url)
+	req, err := prepGet(url)
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("http: %w", err)
 	}
