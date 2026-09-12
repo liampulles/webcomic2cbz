@@ -19,13 +19,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// TODO: Consistently change naming of Volume -> Number
 // TODO: Remove locking refs
 // TODO: Create some common templating helpers
 // TODO: Common zip operations
 // TODO: Start with Number 0?
 // TODO: Consistent filename formatting helpers
-// TODO: Fix README
 
 // --- Regex
 
@@ -491,7 +489,7 @@ type cbzItem struct {
 }
 
 func filterMatchingCBZ(cfgDir string, cfg Config, all []os.DirEntry) ([]cbzItem, error) {
-	// Generate hypothetical titles up to 999 volumes, as a match set.
+	// Generate hypothetical titles up to 999 numbers, as a match set.
 	matchSet := make(map[string]int, 999)
 	for i := 1; i < 1000; i++ {
 		name, err := cbzTitle(cfgDir, cfg, i)
@@ -534,10 +532,10 @@ func cbzTitle(cfgDir string, cfg Config, number int) (string, error) {
 	// Build template data
 	data := struct {
 		Title  string
-		Volume int
+		Number int
 	}{
 		Title:  cfg.Title,
-		Volume: number,
+		Number: number,
 	}
 
 	// Execute the template

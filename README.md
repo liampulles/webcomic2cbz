@@ -55,7 +55,7 @@ cbz:
     # (Note that if you change the naming template after making
     #  a few cbz files, they will be ignored in updates. You should
     #  rename the files manually as well).
-    naming_template: '{{ .Title }} #{{ printf "%03d" .Volume }}'
+    naming_template: '{{ .Title }} #{{ printf "%03d" .Number }}'
 
 source:
     # Ordered list of options, highest is tried first, then it goes to the next option if there are gaps in the sequence and to test for newer issues.

@@ -54,7 +54,7 @@ func UpsertComicInfo(cbzPath string, info ComicInfo) error {
 
 func CreateComicInfo(cfg Config, number int) ComicInfo {
 	return ComicInfo{
-		Title:       fmt.Sprintf("Volume #%d", number),
+		Title:       fmt.Sprintf("Number #%d", number),
 		Writer:      cfg.Writer,
 		LanguageISO: cfg.LanguageIso,
 		Year:        cfg.FirstDate.Year(),
