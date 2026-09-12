@@ -19,7 +19,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// TODO: Remove locking refs
 // TODO: Create some common templating helpers
 // TODO: Common zip operations
 // TODO: Start with Number 0?
@@ -70,8 +69,7 @@ func configProcessJob(cfgPath string) Job {
 			return
 		}
 
-		// Scan for matching CBZ files and upsert ComicInfo for them. This needs to lock cbzs
-		// for the dir.
+		// Scan for matching CBZ files and upsert ComicInfo for them.
 		cfgDir := path.Dir(cfgPath)
 		all, err := os.ReadDir(cfgDir)
 		if err != nil {
