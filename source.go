@@ -12,6 +12,8 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/antchfx/htmlquery"
+	"github.com/antchfx/xpath"
 	"github.com/rs/zerolog/log"
 )
 
@@ -272,7 +274,26 @@ type latestRuleSetupFn func(LatestRuleConfig, Config) (bool, LatestRule, error)
 
 var latestRuleSetups []latestRuleSetupFn = []latestRuleSetupFn{
 	tryHomepageRegexLatestRule,
+	tryHomepageXPathLatestRule,
 }
+
+func newLatestRule(latestConfig LatestRuleConfig, cfg Config) (LatestRule, error) {
+	// Try each
+	for _, setup := range latestRuleSetups {
+		applies, rule, err := setup(latestConfig, cfg)
+		if !applies {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		return rule, nil
+	}
+
+	return nil, errors.New("no latest rule configured- adjust config.")
+}
+
+// --- HomepageRegexLatestRule
 
 type HomepageRegexLatestRule struct {
 	homepage string
@@ -317,20 +338,45 @@ func tryHomepageRegexLatestRule(latestConfig LatestRuleConfig, cfg Config) (bool
 	return true, rule, nil
 }
 
-func newLatestRule(latestConfig LatestRuleConfig, cfg Config) (LatestRule, error) {
-	// Try each
-	for _, setup := range latestRuleSetups {
-		applies, rule, err := setup(latestConfig, cfg)
-		if !applies {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		return rule, nil
+// --- HomepageXPathLatestRule
+
+type HomepageXPathLatestRule struct {
+	homepage string
+	xpath    *xpath.Expr
+}
+
+var _ LatestRule = &HomepageXPathLatestRule{}
+
+func (h *HomepageXPathLatestRule) Latest() (int, error) {
+	doc, err := htmlquery.LoadURL(h.homepage)
+	if err != nil {
+		return 0, fmt.Errorf("homepage xpath: %w", err)
 	}
 
-	return nil, errors.New("no latest rule configured- adjust config.")
+	f := h.xpath.Evaluate(htmlquery.CreateXPathNavigator(doc)).(float64)
+	idx := int(f)
+	if idx <= 0 {
+		return 0, errors.New("homepage xpath: invalid, not producing a valid idx")
+	}
+
+	return idx, nil
+}
+
+func tryHomepageXPathLatestRule(latestConfig LatestRuleConfig, cfg Config) (bool, LatestRule, error) {
+	if latestConfig.HomepageXPath == "" {
+		return false, nil, nil
+	}
+
+	expr, err := xpath.Compile(latestConfig.HomepageXPath)
+	if err != nil {
+		return true, nil, fmt.Errorf("homepage xpath: %w", err)
+	}
+
+	rule := &HomepageXPathLatestRule{
+		homepage: cfg.Homepage,
+		xpath:    expr,
+	}
+	return true, rule, nil
 }
 
 // --- General
