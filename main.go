@@ -13,6 +13,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -36,6 +37,8 @@ func cbzFileLockKey(cbzPath string) string {
 // --- Main logic
 
 func main() {
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+
 	// Get current working dir
 	root, err := os.Getwd()
 	if err != nil {
